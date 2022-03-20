@@ -1,0 +1,139 @@
+version: "3.9"
+
+services:
+  # вариант с запуском cloudflared из оригинального репозитория. Минусы - 
+  # cloudflared:
+  #   container_name: cloudflaredas
+  #   image: cloudflare/cloudflared:2022.1.2
+  #   command: proxy-dns
+  #   volumes:
+  #     - '/usr/local/share/ca-certificates/:/usr/local/share/ca-certificates/:ro'
+  #   environment:
+  #     - "TUNNEL_DNS_UPSTREAM=https://1.1.1.1/dns-query,https://1.0.0.1/dns-query"
+  #     - "TUNNEL_DNS_PORT=5053"
+  #     - "TUNNEL_DNS_ADDRESS=0.0.0.0"
+  #     - "TUNNEL_METRICS=0.0.0.0:49312"
+  #   networks:
+  #     internal:
+  #       ipv4_address: 172.30.0.2
+  #   restart: unless-stopped
+
+  cloudflared:
+    container_name: cloudflared
+    build: 
+      context: .
+      dockerfile: ./cloudflared/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - '/usr/local/share/ca-certificates/:/usr/local/share/ca-certificates/:ro'
+    environment:
+      PORT: 5053
+      ADDRESS: 0.0.0.0
+      UPSTREAM1: https://172.30.0.6:4576/dns-query
+      UPSTREAM2: https://172.30.0.6:4576/dns-query
+    networks:
+      internal:
+        ipv4_address: 172.30.0.2
+
+  pihole:
+    container_name: pihole
+    image: pihole/pihole:2022.02.1
+    ports:
+      - "53:53/tcp"
+#      - "53:53/udp"
+#      - "67:67/udp"
+      - "8085:80/tcp"
+#      - "443:443/tcp"
+    environment:
+      TZ: 'Asia/Yekaterinburg'
+      ServerIP: 172.30.0.3
+      WEBPASSWORD: $PIHOLE_WEBPASSWORD
+      DNSSEC: "false"
+      PIHOLE_DNS_: '172.30.0.2#5053;no'
+    volumes:
+      - 'etc-pihole:/etc/pihole/'
+      - 'etc-dnsmasq.d-pihole:/etc/dnsmasq.d/'
+    cap_add:
+      - NET_ADMIN
+    networks:
+      internal:
+        ipv4_address: 172.30.0.3
+    restart: unless-stopped
+    depends_on:
+      - 'cloudflared'
+
+#  openvpn:
+#    container_name: openvpn
+#    image: kylemanna/openvpn:latest
+#    ports:
+#      - "1194:1194/udp"
+#    cap_add:
+#      - NET_ADMIN
+#    volumes:
+#      - 'ovpn_data:/etc/openvpn'
+#    restart: always
+#    networks:
+#      internal:
+#        ipv4_address: 172.30.0.4
+
+  wireguard:
+    image: ghcr.io/linuxserver/wireguard
+    container_name: wireguard
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Azia/Yekaterinburg
+      - SERVERURL=95.217.211.232
+      - SERVERPORT=51820
+      - PEERS=3
+      - PEERDNS=172.30.0.3
+      - INTERNAL_SUBNET=10.13.13.0
+#      - ALLOWEDIPS=172.30.0.0/24
+      - ALLOWEDIPS=0.0.0.0/0
+    volumes:
+      - ./data/wireguard/config:/config
+      - /lib/modules:/lib/modules
+    ports:
+      - 51820:51820/udp
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    restart: unless-stopped
+    networks:
+      internal:
+        ipv4_address: 172.30.0.5
+
+  odoh-server:
+    container_name: odoh-server
+    image: mschirrmeister/odoh-server-go:v0.1.4-5a9bf1f
+    environment:
+      TARGET_INSTANCE_NAME: test-fqdn
+      SEED_SECRET_KEY: 895faa31b9d14f53342403c00f0b4395
+      EXPERIMENT_ID: EXP_1
+      CERT: /certs/cert.pem
+      KEY: /certs/key.pem
+      PORT: 4576
+    ports:
+      - 4576:4576/tcp
+    volumes:
+      - ./certs:/certs
+    restart: unless-stopped
+    networks:
+      internal:
+        ipv4_address: 172.30.0.6
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  etc-pihole:
+  etc-dnsmasq.d-pihole:
+  ovpn_data:
+    name: $OVPN_DATA
+    external: true
